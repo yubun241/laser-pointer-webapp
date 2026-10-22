@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laser Pointer Viewer</title>
+<style>
+  /* ============================================================
+     Theme
+     ============================================================ */
+  :root {
+    --bg: #111;
+    --laser-color: #ff2a2a;
+    --laser-size: 14px;
+    --panel-bg: rgba(20, 20, 20, .85);
+    --border: #333;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: #ddd;
+    font: 14px/1.4 system-ui, sans-serif;
+    overflow: hidden;
+  }
+
+  kbd {
+    background: #222;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12px;
+    color: #ccc;
+  }
+
+  button {
+    background: #2a2a2a;
+    color: #eee;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+  button:hover    { background: #383838; }
+  button:disabled { opacity: .35; cursor: default; }
+
+  /* ============================================================
+     Stage (document viewport)
+     ============================================================ */
+  #stage {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    cursor: grab;
+    touch-action: none;
+  }
+  #stage.panning { cursor: grabbing; }
+  #stage.laser   { cursor: none; }
+
+  #page {
+    position: absolute;
+    left: 0; top: 0;
+    transform-origin: 0 0;
+    background: #fff;
+    user-select: none;
+    -webkit-user-drag: none;
+    display: none;
+    will-change: transform;
+  }
+
+  #dropzone {
+    position: absolute;
+    inset: 0;
+    margin: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    border: 2px dashed #444;
+    border-radius: 12px;
+    color: #888;
+    text-align: center;
+    pointer-events: none;
+  }
+  #dropzone.hidden { display: none; }
+  #dropzone .title { font-size: 18px; color: #bbb; }
+
+  /* ============================================================
+     Laser dot
+     ============================================================ */
+  .laser-dot {
+    position: fixed;
+    left: 0; top: 0;
+    width: var(--laser-size);
+    height: var(--laser-size);
+    border-radius: 50%;
+    background: var(--laser-color);
+    box-shadow:
+      0 0 6px 2px var(--laser-color),
+      0 0 18px 6px color-mix(in srgb, var(--laser-color) 60%, transparent);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    display: none;
+    will-change: transform;
+  }
+
+  /* ============================================================
+     Toolbar
+     ============================================================ */
+  #toolbar {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--panel-bg);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    z-index: 10;
+  }
+  #toolbar .sep { width: 1px; height: 20px; background: #444; }
+  #toolbar .label {
+    min-width: 52px;
+    text-align: center;
+    color: #aaa;
+    font-variant-numeric: tabular-nums;
+  }
+  #page-nav { display: none; align-items: center; gap: 8px; }
+  #page-nav.visible { display: flex; }
+
+  #file-input { display: none; }
+
+  #toast {
+    position: fixed;
+    left: 50%;
+    top: 16px;
+    transform: translateX(-50%);
+    padding: 8px 14px;
+    background: #300;
+    border: 1px solid #a33;
+    border-radius: 8px;
+    color: #fcc;
+    display: none;
+    z-index: 30;
+  }
+
+  /* ============================================================
+     Settings dialog
+     ============================================================ */
+  #settings {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, .55);
+    z-index: 20;
+  }
+  #settings.open { display: flex; }
+
+  #settings .panel {
+    display: grid;
+    gap: 14px;
+    min-width: 300px;
+    padding: 20px 24px;
+    background: #1b1b1b;
+    border: 1px solid #3a3a3a;
+    border-radius: 12px;
+  }
+  #settings h2 { font-size: 15px; font-weight: 600; color: #eee; }
+  #settings label {
+    display: grid;
+    grid-template-columns: 70px 1fr auto;
+    align-items: center;
+    gap: 10px;
+  }
+  #settings input[type=range] { width: 100%; }
+  #settings input[type=color] {
+    width: 40px; height: 28px;
+    border: none; background: none; padding: 0;
+    cursor: pointer;
+  }
+  #settings .preview {
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    border-radius: 8px;
+  }
+  #settings .preview .laser-dot { position: static; display: block; transform: none; }
+  #settings .help { color: #888; font-size: 12px; line-height: 1.7; }
+  #settings .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #settings .actions button { padding: 5px 12px; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <img id="page" alt="">
+  <div id="dropzone">
+    <div class="title">PNG / JPG / PDF をここにドロップ、または <kbd>O</kbd> で開く</div>
+    <div>右クリック長押し = レーザー &nbsp; 左ドラッグ = パン &nbsp; ホイール = 拡大縮小 &nbsp; ダブルクリック = リセット</div>
+    <div>PDF のページ送り： 次 <kbd>→</kbd> <kbd>↓</kbd> &nbsp; 前 <kbd>←</kbd> <kbd>↑</kbd></div>
+  </div>
+</div>
+
+<div id="toolbar">
+  <button id="btn-open">開く (O)</button>
+  <div id="page-nav">
+    <div class="sep"></div>
+    <button id="btn-prev">◀</button>
+    <span id="page-label" class="label">1/1</span>
+    <button id="btn-next">▶</button>
+  </div>
+  <div class="sep"></div>
+  <button id="btn-zoom-out">−</button>
+  <span id="zoom-label" class="label">100%</span>
+  <button id="btn-zoom-in">＋</button>
+  <button id="btn-reset">リセット (0)</button>
+  <button id="btn-fullscreen">全画面 (F)</button>
+  <button id="btn-settings">設定 (S)</button>
+</div>
+
+<input type="file" id="file-input" accept="image/*,application/pdf">
+<div id="toast"></div>
+
+<div id="settings">
+  <div class="panel">
+    <h2>レーザー設定</h2>
+    <label>色 <input type="color" id="laser-color"> <span></span></label>
+    <label>太さ <input type="range" id="laser-size" min="6" max="48"> <span id="laser-size-value"></span></label>
+    <div class="preview"><div class="laser-dot"></div></div>
+    <div class="help">
+      右クリックを押している間だけレーザーが表示されます。<br>
+      左ドラッグでパン、ホイールでカーソル位置を中心に拡大縮小。
+    </div>
+    <div class="actions">
+      <button id="btn-defaults">初期値に戻す</button>
+      <button id="btn-close">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+/* ==============================================================
+   Laser Pointer Viewer
+   - 画像 (PNG/JPG…) と PDF を同じ表示パイプラインで扱う
+   - ビュー変換:  screen = doc * scale + (tx, ty)
+   - PDF はズーム後に高解像度で再レンダリング（表示サイズは論理サイズ固定）
+   ============================================================== */
+
+const PDFJS_VERSION = '4.6.82';
+const PDFJS_BASE    = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}`;
+
+const ZOOM_MIN   = 0.05;
+const ZOOM_MAX   = 40;
+const ZOOM_STEP  = 1.25;
+const WHEEL_GAIN = 0.0015;
+
+const PDF_RES_MIN = 1.5;   // device px / doc px
+const PDF_RES_MAX = 4;
+const PDF_RERENDER_DELAY = 250;
+
+const $ = (sel) => document.querySelector(sel);
+
+const el = {
+  stage:      $('#stage'),
+  page:       $('#page'),
+  dropzone:   $('#dropzone'),
+  fileInput:  $('#file-input'),
+  toast:      $('#toast'),
+  pageNav:    $('#page-nav'),
+  pageLabel:  $('#page-label'),
+  zoomLabel:  $('#zoom-label'),
+  settings:   $('#settings'),
+  colorInput: $('#laser-color'),
+  sizeInput:  $('#laser-size'),
+  sizeValue:  $('#laser-size-value'),
+};
+
+function showToast(message, ms = 4000) {
+  el.toast.textContent = message;
+  el.toast.style.display = 'block';
+  setTimeout(() => (el.toast.style.display = 'none'), ms);
+}
+
+/* --------------------------------------------------------------
+   Settings (persisted to localStorage)
+   -------------------------------------------------------------- */
+const SETTINGS_KEY = 'laserSettings';
+const SETTINGS_DEFAULT = { color: '#ff2a2a', size: 14 };
+
+const settings = {
+  ...SETTINGS_DEFAULT,
+  ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}'),
+};
+
+function applySettings({ save = true } = {}) {
+  const root = document.documentElement;
+  root.style.setProperty('--laser-color', settings.color);
+  root.style.setProperty('--laser-size', `${settings.size}px`);
+  el.colorInput.value = settings.color;
+  el.sizeInput.value = settings.size;
+  el.sizeValue.textContent = `${settings.size}px`;
+  if (save) localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function setSettingsOpen(open) {
+  el.settings.classList.toggle('open', open);
+}
+
+el.colorInput.addEventListener('input', (e) => { settings.color = e.target.value; applySettings(); });
+el.sizeInput.addEventListener('input',  (e) => { settings.size = Number(e.target.value); applySettings(); });
+$('#btn-defaults').addEventListener('click', () => { Object.assign(settings, SETTINGS_DEFAULT); applySettings(); });
+$('#btn-settings').addEventListener('click', () => setSettingsOpen(true));
+$('#btn-close').addEventListener('click', () => setSettingsOpen(false));
+el.settings.addEventListener('pointerdown', (e) => { if (e.target === el.settings) setSettingsOpen(false); });
+
+applySettings({ save: false });
+
+/* --------------------------------------------------------------
+   View transform
+   -------------------------------------------------------------- */
+const view = { scale: 1, tx: 0, ty: 0 };
+const doc  = { width: 0, height: 0 };   // logical size in doc px
+
+function renderView() {
+  el.page.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`;
+  el.zoomLabel.textContent = `${Math.round(view.scale * 100)}%`;
+}
+
+function fitToStage() {
+  if (!doc.width) return;
+  const W = el.stage.clientWidth;
+  const H = el.stage.clientHeight;
+  view.scale = Math.min(W / doc.width, H / doc.height);
+  view.tx = (W - doc.width * view.scale) / 2;
+  view.ty = (H - doc.height * view.scale) / 2;
+  renderView();
+  pdf.scheduleRerender();
+}
+
+/** スクリーン座標 (sx, sy) 直下のドキュメント点を固定したままズーム */
+function zoomAt(factor, sx, sy) {
+  const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, view.scale * factor));
+  const k = next / view.scale;
+  view.tx = sx - (sx - view.tx) * k;
+  view.ty = sy - (sy - view.ty) * k;
+  view.scale = next;
+  renderView();
+  pdf.scheduleRerender();
+}
+
+function stageCenter() {
+  return [el.stage.clientWidth / 2, el.stage.clientHeight / 2];
+}
+
+/* --------------------------------------------------------------
+   Bitmap source (image or rendered PDF page)
+   -------------------------------------------------------------- */
+let currentObjectUrl = null;
+
+/** 表示ビットマップを差し替える。論理サイズを固定するので解像度と view は独立 */
+function setBitmap(url, width, height) {
+  if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+  currentObjectUrl = url;
+  el.page.src = url;
+  doc.width = width;
+  doc.height = height;
+  el.page.style.width = `${width}px`;
+  el.page.style.height = `${height}px`;
+  el.page.style.display = 'block';
+  el.dropzone.classList.add('hidden');
+}
+
+/* --------------------------------------------------------------
+   PDF
+   -------------------------------------------------------------- */
+const pdf = {
+  lib: null,
+  document: null,
+  pageNo: 1,
+  pageCount: 1,
+  renderedRes: 0,
+  renderToken: 0,
+  rerenderTimer: null,
+
+  async load(file) {
+    if (!this.lib) {
+      this.lib = await import(`${PDFJS_BASE}/pdf.min.mjs`);
+      this.lib.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/pdf.worker.min.mjs`;
+    }
+    this.document = await this.lib.getDocument({ data: await file.arrayBuffer() }).promise;
+    this.pageCount = this.document.numPages;
+    this.pageNo = 1;
+    el.pageNav.classList.add('visible');
+    await this.showPage();
+  },
+
+  close() {
+    this.document = null;
+    el.pageNav.classList.remove('visible');
+  },
+
+  desiredRes() {
+    return Math.min(PDF_RES_MAX, Math.max(PDF_RES_MIN, view.scale * devicePixelRatio));
+  },
+
+  async renderPage(res) {
+    const token = ++this.renderToken;
+    const page = await this.document.getPage(this.pageNo);
+    const logical = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: res });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    if (token !== this.renderToken) return;   // 新しいレンダリングに追い越された
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (token !== this.renderToken) return;
+
+    setBitmap(URL.createObjectURL(blob), logical.width, logical.height);
+    this.renderedRes = res;
+  },
+
+  async showPage() {
+    el.pageLabel.textContent = `${this.pageNo}/${this.pageCount}`;
+    $('#btn-prev').disabled = this.pageNo <= 1;
+    $('#btn-next').disabled = this.pageNo >= this.pageCount;
+    await this.renderPage(this.desiredRes());
+    fitToStage();
+  },
+
+  goto(n) {
+    if (!this.document) return;
+    n = Math.max(1, Math.min(this.pageCount, n));
+    if (n === this.pageNo) return;
+    this.pageNo = n;
+    this.showPage();
+  },
+
+  /** ズームが落ち着いたら解像度を見直す（上下に十分な差があるときだけ再描画） */
+  scheduleRerender() {
+    if (!this.document) return;
+    clearTimeout(this.rerenderTimer);
+    this.rerenderTimer = setTimeout(() => {
+      const want = this.desiredRes();
+      if (want > this.renderedRes * 1.3 || want < this.renderedRes / 2) this.renderPage(want);
+    }, PDF_RERENDER_DELAY);
+  },
+};
+
+/* --------------------------------------------------------------
+   File loading
+   -------------------------------------------------------------- */
+async function openFile(file) {
+  if (!file) return;
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  const isImage = file.type.startsWith('image/');
+  if (!isPdf && !isImage) {
+    showToast('未対応の形式です（PNG / JPG / PDF）');
+    return;
+  }
+
+  document.title = `${file.name} – Laser Pointer`;
+
+  if (isPdf) {
+    await pdf.load(file);
+    return;
+  }
+
+  pdf.close();
+  const bitmap = await createImageBitmap(file);   // 自然サイズ取得のみ（EXIF回転も反映）
+  const { width, height } = bitmap;
+  bitmap.close();
+  setBitmap(URL.createObjectURL(file), width, height);
+  await el.page.decode().catch(() => {});
+  fitToStage();
+}
+
+el.fileInput.addEventListener('change', (e) => openFile(e.target.files[0]));
+$('#btn-open').addEventListener('click', () => el.fileInput.click());
+
+el.stage.addEventListener('dragover', (e) => e.preventDefault());
+el.stage.addEventListener('drop', (e) => {
+  e.preventDefault();
+  openFile(e.dataTransfer.files[0]);
+});
+window.addEventListener('paste', (e) => {
+  const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith('image/'));
+  if (item) openFile(item.getAsFile());
+});
+
+/* --------------------------------------------------------------
+   Laser pointer
+   -------------------------------------------------------------- */
+const laserDot = document.createElement('div');
+laserDot.className = 'laser-dot';
+document.body.appendChild(laserDot);
+
+let laserOn = false;
+
+function setLaser(on) {
+  laserOn = on;
+  el.stage.classList.toggle('laser', on);
+  laserDot.style.display = on ? 'block' : 'none';
+}
+
+function moveLaser(x, y) {
+  laserDot.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+}
+
+/* --------------------------------------------------------------
+   Pointer input
+     右ボタン: 押下中レーザー
+     左ボタン / 1本指: パン
+     2本指: ピンチズーム
+   -------------------------------------------------------------- */
+const activePointers = new Map();   // pointerId -> {x, y}
+let panState = null;                // {x, y, tx, ty}
+let pinchState = null;              // {dist, scale}
+
+el.stage.addEventListener('contextmenu', (e) => e.preventDefault());
+
+el.stage.addEventListener('pointerdown', (e) => {
+  if (e.button === 2) {
+    setLaser(true);
+    moveLaser(e.clientX, e.clientY);
+    el.stage.setPointerCapture(e.pointerId);
+    return;
+  }
+  if (e.button !== 0) return;
+
+  el.stage.setPointerCapture(e.pointerId);
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (activePointers.size === 1) {
+    panState = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
+    el.stage.classList.add('panning');
+  } else if (activePointers.size === 2) {
+    panState = null;
+    const [a, b] = [...activePointers.values()];
+    pinchState = { dist: Math.hypot(a.x - b.x, a.y - b.y), scale: view.scale };
+  }
+});
+
+el.stage.addEventListener('pointermove', (e) => {
+  if (laserOn) moveLaser(e.clientX, e.clientY);
+  if (!activePointers.has(e.pointerId)) return;
+
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (pinchState && activePointers.size === 2) {
+    const [a, b] = [...activePointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    const target = pinchState.scale * dist / pinchState.dist;
+    zoomAt(target / view.scale, (a.x + b.x) / 2, (a.y + b.y) / 2);
+  } else if (panState) {
+    view.tx = panState.tx + (e.clientX - panState.x);
+    view.ty = panState.ty + (e.clientY - panState.y);
+    renderView();
+  }
+});
+
+function onPointerEnd(e) {
+  if (e.button === 2 || (laserOn && !activePointers.has(e.pointerId))) setLaser(false);
+
+  activePointers.delete(e.pointerId);
+  if (activePointers.size < 2) pinchState = null;
+
+  if (activePointers.size === 0) {
+    panState = null;
+    el.stage.classList.remove('panning');
+  } else if (activePointers.size === 1) {
+    const [p] = activePointers.values();
+    panState = { x: p.x, y: p.y, tx: view.tx, ty: view.ty };
+  }
+}
+el.stage.addEventListener('pointerup', onPointerEnd);
+el.stage.addEventListener('pointercancel', onPointerEnd);
+window.addEventListener('blur', () => setLaser(false));
+
+el.stage.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoomAt(Math.exp(-e.deltaY * WHEEL_GAIN), e.clientX, e.clientY);
+}, { passive: false });
+
+el.stage.addEventListener('dblclick', (e) => { if (e.button === 0) fitToStage(); });
+
+/* --------------------------------------------------------------
+   Toolbar & keyboard
+   -------------------------------------------------------------- */
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  else document.documentElement.requestFullscreen?.();
+}
+
+$('#btn-zoom-in').addEventListener('click',  () => zoomAt(ZOOM_STEP, ...stageCenter()));
+$('#btn-zoom-out').addEventListener('click', () => zoomAt(1 / ZOOM_STEP, ...stageCenter()));
+$('#btn-reset').addEventListener('click', fitToStage);
+$('#btn-fullscreen').addEventListener('click', toggleFullscreen);
+$('#btn-prev').addEventListener('click', () => pdf.goto(pdf.pageNo - 1));
+$('#btn-next').addEventListener('click', () => pdf.goto(pdf.pageNo + 1));
+
+const keyActions = {
+  o: () => el.fileInput.click(),
+  f: toggleFullscreen,
+  s: () => setSettingsOpen(!el.settings.classList.contains('open')),
+  '0': fitToStage,
+  '+': () => zoomAt(ZOOM_STEP, ...stageCenter()),
+  '=': () => zoomAt(ZOOM_STEP, ...stageCenter()),
+  '-': () => zoomAt(1 / ZOOM_STEP, ...stageCenter()),
+  // 次のページ: → ↓ PageDown Space
+  ArrowRight: () => pdf.goto(pdf.pageNo + 1),
+  ArrowDown:  () => pdf.goto(pdf.pageNo + 1),
+  PageDown:   () => pdf.goto(pdf.pageNo + 1),
+  ' ':        () => pdf.goto(pdf.pageNo + 1),
+  // 前のページ: ← ↑ PageUp
+  ArrowLeft:  () => pdf.goto(pdf.pageNo - 1),
+  ArrowUp:    () => pdf.goto(pdf.pageNo - 1),
+  PageUp:     () => pdf.goto(pdf.pageNo - 1),
+  Home:       () => pdf.goto(1),
+  End:        () => pdf.goto(pdf.pageCount),
+  Escape:     () => { setSettingsOpen(false); setLaser(false); },
+};
+
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const action = keyActions[key];
+  if (!action) return;
+  e.preventDefault();
+  action();
+});
+</script>
+</body>
+</html>
