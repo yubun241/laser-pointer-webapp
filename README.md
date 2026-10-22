@@ -1,7 +1,7 @@
 # Laser Pointer Viewer
 
 画像（PNG / JPG）と PDF をブラウザで開き、PowerPoint のレーザーポインタのように指し示しながら説明するためのビューア。
-単一の `index.html` で完結し、サーバー不要。ファイルはブラウザ内で処理され、外部に送信されない。
+`index.html` をダブルクリックで開くだけ。ファイルはブラウザ内で処理され、外部に送信されない。
 
 ## 使い方
 
@@ -9,7 +9,9 @@
 index.html をブラウザで開く → ファイルをドロップ（または O キー）
 ```
 
-GitHub Pages など静的ホスティングにそのまま置いても動く。
+- **画像だけ使う**：これだけで動く。外部依存なし、完全オフライン。
+- **PDF も使う**：PDF.js が必要。オンラインなら自動で CDN から読み込む。
+  オフラインでも使うなら下記「オフラインで PDF を開く」を一度だけ実行。
 
 ### 操作
 
@@ -20,12 +22,14 @@ GitHub Pages など静的ホスティングにそのまま置いても動く。
 | ホイール | カーソル位置を中心に拡大縮小 |
 | ダブルクリック / `0` | 画面にフィット |
 | `+` / `-` | 段階ズーム |
-| `→` `↓` `PageDown` `Space` | 次のページ（PDF） |
+| `→` `↓` `PageDown` | 次のページ（PDF） |
 | `←` `↑` `PageUp` | 前のページ（PDF） |
 | `Home` / `End` | 先頭 / 末尾ページ |
+| `Space` | タイマー開始 / 停止（タイマー ON 時） |
+| `R` | タイマーリセット（タイマー ON 時） |
 | `O` | ファイルを開く |
 | `F` | 全画面 |
-| `S` | 設定（レーザーの色・太さ） |
+| `S` | 設定（レーザー / タイマー） |
 | `Esc` | 設定を閉じる / レーザー解除 |
 | ドラッグ＆ドロップ / 貼り付け | 画像・PDF を開く |
 
@@ -33,25 +37,37 @@ GitHub Pages など静的ホスティングにそのまま置いても動く。
 
 ### 設定
 
-レーザーの色と太さは `localStorage` に保存され、次回起動時も引き継がれる。
+- **レーザー**：色・太さ
+- **タイマー**：表示 ON/OFF、時間（分・秒）
+  - 時間を設定するとカウントダウン。0 になると赤く点滅して停止。
+  - 時間が 0:00 のままならカウントアップ。
+  - 右上に表示。`Space` で開始/停止、`R` でリセット。
 
-## 構成
+設定はすべて `localStorage` に保存され、次回起動時も引き継がれる。
+
+## オフラインで PDF を開く（任意）
+
+通常は不要。オンラインなら `index.html` だけで PDF が開ける。
+ネットワークが無い環境でも PDF を使いたい場合だけ、次の2ファイルをダウンロードして `index.html` と同じ場所の `vendor/` フォルダに置く：
+
+- https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js
+- https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js
 
 ```
-index.html   すべて（HTML / CSS / JS）
+index.html
+vendor/
+  pdf.min.js
+  pdf.worker.min.js
 ```
 
-外部依存は [PDF.js](https://mozilla.github.io/pdf.js/) のみ。CDN（cdnjs）から動的 import する。
+`vendor/` があればそれを優先し、無ければ CDN から読む。画像だけ使うなら何も要らない。
 
-### オフラインで使う
+### なぜ UMD 版 (3.x) をローカルに置くのか
 
-`pdf.min.mjs` と `pdf.worker.min.mjs` をローカルに置き、`index.html` 内の `PDFJS_BASE` をそのパスに変更する。
-`file://` 直開きだとローカル module の import をブラウザが拒否する場合があるため、その際は簡易サーバーで配信する。
-
-```
-python -m http.server 8000
-# → http://localhost:8000/index.html
-```
+`file://` で直接開いたページでは、ブラウザは ES module の `import` と Web Worker の生成を拒否する。
+classic `<script>` はこの制約を受けないため、PDF.js の UMD 版を `<script>` で読み込み、worker も同じ方法で先に読み込んでおく。
+すると PDF.js は Worker を作らずメインスレッドで処理するようになり、`file://` でも動く。
+`vendor/` が無い場合は CDN の ESM 版にフォールバックする（オンライン時のみ）。
 
 ## 設計メモ
 
@@ -59,6 +75,7 @@ python -m http.server 8000
 - **ビットマップ解像度と論理サイズを分離**。`<img>` の CSS サイズをドキュメントの論理サイズに固定し、PDF はズーム後に高解像度（1.5〜4× devicePixelRatio）で再レンダリングして差し替える。表示位置はビットマップ解像度に依存しない。
 - **再レンダリングの追い越し防止**。`renderToken` で古い非同期レンダリング結果を破棄し、ページ送り・ズームを連打しても表示が逆転しない。
 - **レーザーは DOM 要素 + `transform`**。Canvas を使わず合成レイヤーのみで動くので描画コストが低い。
+- **タイマーはタイムスタンプ差分**で計測。`setInterval` は表示更新のみに使い、遅延の累積でズレないようにしている。
 - 画像は `createImageBitmap` で自然サイズを取得（EXIF 回転を反映）し、表示自体はブラウザの `<img>` に任せる。
 
 ## 対応形式
@@ -70,4 +87,4 @@ Excel / Word / PowerPoint は各アプリから PDF に書き出して開く。
 
 ## ブラウザ要件
 
-`color-mix()`、Pointer Events、ES modules に対応したモダンブラウザ（Chrome / Edge / Firefox / Safari の 2023 年以降）。
+`color-mix()`、Pointer Events に対応したモダンブラウザ（Chrome / Edge / Firefox / Safari の 2023 年以降）。
